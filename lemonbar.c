@@ -19,8 +19,6 @@
 #include <X11/Xft/Xft.h>
 #include <X11/Xlib-xcb.h>
 
-#include <pango/pangoxft.h>
-
 // Here be dragons!
 
 #define max(a,b) ((a) > (b) ? (a) : (b))
@@ -238,37 +236,6 @@ void draw_string(
 ) {
     int y = bh / 2 + font->height / 2 - font->descent + offsets_y[offset_y_index];
     XftDrawString16(xft_draw, &sel_fg, font->xft_ft, x_offset, y, string, num_chars);
-
-    /* PangoFontMap* font_map = pango_xft_get_font_map(dpy, 0); */
-    /* #<{(| char const* font_string = "UbuntuMono Nerd Font Mono 60"; |)}># */
-    /* char const* font_string = "FiraCode Nerd Font Mono 60"; */
-    /* PangoFontDescription* font_description = pango_font_description_from_string(font_string); */
-
-
-    // List available families.
-    /* PangoFontFamily** families_ptr; */
-    /* int n_families; */
-    /* pango_font_map_list_families(font_map, &families_ptr, &n_families); */
-    /* for (int i = 0; i < n_families; i++) { */
-    /*     printf( */
-    /*         "%s\n", */
-    /*         pango_font_family_get_name(families_ptr[i]) */
-    /*     ); */
-    /* } */
-
-    /* PangoContext* context = pango_font_map_create_context(font_map); */
-    /* pango_context_set_font_description(context, font_description); */
-
-    /* PangoFont* pango_font = pango_font_map_load_font (font_map, context, font_description); */
-    /* printf("%p\n", pango_font); */
-    /* pango_font_map_changed(font_map); */
-    /*  */
-
-    /* PangoLayout* layout = pango_layout_new(context); */
-    /* pango_layout_set_text(layout, "===\ue62b\uf308===", 14); */
-    /* int width, height; */
-    /* pango_layout_get_pixel_size (layout, &width, &height); */
-    /* pango_xft_render_layout(xft_draw, &sel_fg, layout, x_offset, y); */
 }
 
 rgba_t expand_rgba_t(rgba_t color, int source_length, rgba_t const default_color) {
