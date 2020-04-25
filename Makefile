@@ -1,4 +1,4 @@
-# This snippet has been shmelessly stol^Hborrowed from thestinger's repose Makefile
+# This snippet has been shamelessly stol^Hborrowed from thestinger's repos' Makefile
 VERSION = 1.1
 GIT_DESC=$(shell test -d .git && git describe --always 2>/dev/null)
 
@@ -7,8 +7,13 @@ ifneq "$(GIT_DESC)" ""
 endif
 
 CC	?= gcc
-CFLAGS += -Wall -std=c99 -Os -DVERSION="\"$(VERSION)\"" -I/usr/include/freetype2
-LDFLAGS += -lxcb -lxcb-xinerama -lxcb-randr -lX11 -lX11-xcb -lXft -lfreetype -lz -lfontconfig
+CFLAGS += -Wall -std=c99 -Os -DVERSION="\"$(VERSION)\"" \
+		-I/usr/include/freetype2 \
+		-I/usr/include/pango-1.0 \
+		-I/usr/include/glib-2.0 \
+		-I/usr/lib64/glib-2.0/include \
+		-I/usr/include/harfbuzz
+LDFLAGS += -lxcb -lxcb-randr -lX11 -lX11-xcb -lXft -lfreetype -lz -lfontconfig -lpango-1.0 -lpangoxft-1.0
 CFDEBUG = -g3 -pedantic -Wall -Wunused-parameter -Wlong-long \
           -Wsign-conversion -Wconversion -Wimplicit-function-declaration
 
