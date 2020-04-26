@@ -184,7 +184,6 @@ int xft_string_width(uint16_t* string, int num_chars) {
         buffer[i] = string[i];
     }
 
-    printf("%.*s\t%d %d\n", num_chars, buffer, extents.width, extents.xOff);
     // This is the continuation of the mega dirty ugly hack for making lemonbar work again.
     // Whenever we render something which is wider than what we should offset the cursor by,
     // we offset the cursor by the width instead. Thus, all icons which are wider than monospace
@@ -703,16 +702,16 @@ void set_ewmh_atoms(void) {
     }
 }
 
-monitor_t* monitor_new(int x, int y, int width, int height) {
+monitor_t* monitor_new(xcb_rectangle_t rect) {
     monitor_t* monitor = calloc(1, sizeof(monitor_t));
     if(!monitor) {
         fprintf(stderr, "Failed to allocate new monitor\n");
         exit(EXIT_FAILURE);
     }
 
-    monitor->x = x;
-    monitor->y = y;
-    monitor->width = width;
+    monitor->x = rect.x;
+    monitor->y = rect.y;
+    monitor->width = rect.width;
 
     monitor->next = monitor->prev = NULL;
     monitor->window = xcb_generate_id(c);
@@ -720,26 +719,28 @@ monitor_t* monitor_new(int x, int y, int width, int height) {
     uint32_t mask =
         XCB_CW_BACK_PIXEL | XCB_CW_BORDER_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK | XCB_CW_COLORMAP;
     uint32_t value_list[] = {bgc.v, bgc.v, dock, XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS, colormap};
-    xcb_create_window(c, depth, monitor->window, scr->root, monitor->x, monitor->y, width, height, 0,
+    xcb_create_window(c, depth, monitor->window, scr->root, rect.x, rect.y, rect.width, bar_height, 0,
                       XCB_WINDOW_CLASS_INPUT_OUTPUT, visual, mask, (void*)value_list);
 
     monitor->pixmap = xcb_generate_id(c);
-    xcb_create_pixmap(c, depth, monitor->pixmap, monitor->window, width, height);
+    xcb_create_pixmap(c, depth, monitor->pixmap, monitor->window, rect.width, bar_height);
 
     return monitor;
 }
 
-void monitor_add(monitor_t* mon) {
+void monitor_add(xcb_rectangle_t rect) {
+    monitor_t* mon = monitor_new(rect);
+    if(!mon) {
+        fprintf(stderr, "Failed to build monitor\n");
+        return;
+    }
+
     if(!monhead) {
-        monhead = mon;
-    } else if(!montail) {
-        montail = mon;
-        monhead->next = mon;
-        mon->prev = monhead;
+        monhead = montail = mon;
     } else {
-        mon->prev = montail;
         montail->next = mon;
-        montail = montail->next;
+        mon->prev = montail;
+        montail = mon;
     }
 }
 
@@ -758,53 +759,6 @@ int rect_sort_cb(const void* p1, const void* p2) {
     return 0;
 }
 
-void monitor_create_chain(xcb_rectangle_t* rects, const int num) {
-    int width = 0, height = 0;
-    int left = 0;
-
-    // Sort before use
-    qsort(rects, num, sizeof(xcb_rectangle_t), rect_sort_cb);
-
-    for(int i = 0; i < num; i++) {
-        int h = rects[i].y + rects[i].height;
-        // Accumulated width of all monitors
-        width += rects[i].width;
-        // Get height of screen from y_offset + height of lowest monitor
-        if(h >= height)
-            height = h;
-    }
-
-    // Left is a positive number or zero therefore monitors with zero width are excluded
-    /* width = bw; */
-    for(int i = 0; i < num; i++) {
-        if(rects[i].width > left) {
-            monitor_t* mon =
-                monitor_new(rects[i].x + left, rects[i].y, min(width, rects[i].width - left), rects[i].height);
-
-            if(!mon)
-                break;
-
-            monitor_add(mon);
-
-            width -= rects[i].width - left;
-            // No need to check for other monitors
-            if(width <= 0)
-                break;
-        }
-
-        left -= rects[i].width;
-
-        if(left < 0)
-            left = 0;
-    }
-}
-
-bool xcb_rect_contains_xcb_rect(xcb_rect* a, xcb_rect* b) {
-    bool a_contains_b_horizontal = a.x <= b.x && b.x + b.width <= a.x + a.width;
-    bool a_contains_b_vertical = a.y <= b.y && b.y + b.height <= a.y + a.height;
-    return a_contains_b_horizontal && a_contains_b_vertical;
-}
-
 #define _RANDR_REQUEST(operation, variable, ...)                                                                       \
     operation##_reply_t* variable = operation##_reply(c, operation(__VA_ARGS__), NULL);
 #define RANDR_REQUEST(operation, variable, ...) _RANDR_REQUEST(xcb_randr_##operation, variable, __VA_ARGS__)
@@ -812,7 +766,7 @@ bool xcb_rect_contains_xcb_rect(xcb_rect* a, xcb_rect* b) {
 int populate_rects_from_outputs(xcb_randr_output_t* outputs, xcb_rectangle_t* rects, int max_rects) {
     // Get all outputs.
     int num_rects = 0;
-    for(int i = 0; i < num; i++) {
+    for(int i = 0; i < max_rects; i++) {
         RANDR_REQUEST(get_output_info, output_info, c, outputs[i], XCB_CURRENT_TIME)
         if(output_info == NULL) {
             fprintf(stderr, "No output info available\n");
@@ -823,8 +777,9 @@ int populate_rects_from_outputs(xcb_randr_output_t* outputs, xcb_rectangle_t* re
         xcb_randr_crtc_t crtc = output_info->crtc;
         free(output_info);
 
-        // Output disconnected or not attached to any CRTC ?
+        // Output disconnected or not attached to any CRTC?
         if(crtc == XCB_NONE || connection != XCB_RANDR_CONNECTION_CONNECTED) {
+            fprintf(stderr, "Output not connected?\n");
             continue;
         }
 
@@ -835,50 +790,36 @@ int populate_rects_from_outputs(xcb_randr_output_t* outputs, xcb_rectangle_t* re
         }
 
         // There's no need to handle rotated screens here (see #69)
-        xcb_rectangle_t new_rect{crtc_info->x, crtc_info->y, crtc_info->width, crtc_info->height};
+        rects[num_rects++] = (xcb_rectangle_t){crtc_info->x, crtc_info->y, crtc_info->width, crtc_info->height};
         free(crtc_info);
-
-        // Check for clones and inactive outputs.
-        // When one screen contains another, use the outermost screen.
-        for(int j = 0; j < num_rects; j++) {
-            if(rects[j].x >= rects[i].x && rects[j].x + rects[j].width <= rects[i].x + rects[i].width &&
-               rects[j].y >= rects[i].y && rects[j].y + rects[j].height <= rects[i].y + rects[i].height) {
-                rects[j].width = 0;
-                num_rects--;
-            }
-        }
-
-        rects[i] = (xcb_rectangle_t)num_rects++;
-
     }
     return num_rects;
 }
 
 void handle_randr_monitors(xcb_randr_get_screen_resources_current_reply_t* screen_resources) {
     // There should be at least one output.
-    int num = xcb_randr_get_screen_resources_current_outputs_length(screen_resources);
-    if(num < 1) {
+    int num_outputs = xcb_randr_get_screen_resources_current_outputs_length(screen_resources);
+    if(num_outputs == 0) {
+        fprintf(stderr, "No outputs to connect to\n");
         return;
     }
+    fprintf(stderr, "Found %d possible outputs\n", num_outputs);
 
     xcb_randr_output_t* outputs = xcb_randr_get_screen_resources_current_outputs(screen_resources);
 
-    xcb_rectangle_t rects[num];
-    int num_rects = populate_rects_from_outputs(outputs, rects, num);
-
-
-    if(num_rects < 1) {
+    xcb_rectangle_t rects[num_outputs];
+    int num_usable_outputs = populate_rects_from_outputs(outputs, rects, num_outputs);
+    if(num_usable_outputs == 0) {
         fprintf(stderr, "No usable RandR output found\n");
         return;
     }
 
-    xcb_rectangle_t r[num_rects];
+    fprintf(stderr, "Found %d usable outputs\n", num_usable_outputs);
 
-    for(int i = 0, j = 0; i < num && j < num_rects; i++)
-        if(rects[i].width != 0)
-            r[j++] = rects[i];
-
-    monitor_create_chain(r, num_rects);
+    qsort(rects, num_usable_outputs, sizeof(xcb_rectangle_t), rect_sort_cb);
+    for(int i = 0; i < num_usable_outputs; i++) {
+        monitor_add(rects[i]);
+    }
 }
 
 // Query the screen resources to get an overview of the current monitor setup.
@@ -945,12 +886,12 @@ void init(char* wm_instance) {
         get_randr_monitors();
     }
 
-    if(!monhead) {
-        // If no RandR outputs or Xinerama screens, fall back to using whole screen
-        monhead = monitor_new(0, 0, 0, scr->height_in_pixels);
+    if(monhead == NULL) {
+        // If no RandR outputs or Xinerama screens, fall back to using whole screen.
+        monitor_add((xcb_rectangle_t){0, 0, scr->width_in_pixels, scr->height_in_pixels});
     }
 
-    if(!monhead) {
+    if(monhead == NULL) {
         fprintf(stderr, "Failed to initialize new monitor\n");
         exit(EXIT_FAILURE);
     }
@@ -1012,9 +953,12 @@ void init(char* wm_instance) {
 
 void cleanup(void) {
     free(areas);
-    XftFontClose(dpy, font.xft_ft);
 
-    while(monhead) {
+    if (font.xft_ft != NULL) {
+        XftFontClose(dpy, font.xft_ft);
+    }
+
+    while(monhead != NULL) {
         monitor_t* next = monhead->next;
         xcb_destroy_window(c, monhead->window);
         xcb_free_pixmap(c, monhead->pixmap);
@@ -1024,12 +968,15 @@ void cleanup(void) {
 
     XftColorFree(dpy, visual_ptr, colormap, &sel_fg);
 
-    if(gc[GC_DRAW])
+    if(gc[GC_DRAW]) {
         xcb_free_gc(c, gc[GC_DRAW]);
-    if(gc[GC_CLEAR])
+    }
+    if(gc[GC_CLEAR]) {
         xcb_free_gc(c, gc[GC_CLEAR]);
-    if(c)
+    }
+    if(c) {
         xcb_disconnect(c);
+    }
 }
 
 char* strip_path(char* path) {
@@ -1150,6 +1097,10 @@ int main(int argc, char* argv[]) {
     xconn();
 
     parse_options(argc, argv);
+    if (font.xft_ft == NULL) {
+        fprintf(stderr, "No font specified\n");
+        return EXIT_FAILURE;
+    }
 
     areas = (area_t*)malloc(max_areas * sizeof(area_t));
     if(areas == NULL) {
